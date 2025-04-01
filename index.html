@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple OTP Manager</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background-color: #f4f4f9;
+            max-width: 600px;
+            margin: auto;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        h2 {
+            text-align: center;
+            color: #333;
+        }
+        .input-container {
+            margin-bottom: 20px;
+        }
+        .input-container label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        .input-container input {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        .button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 10px;
+        }
+        .button:hover {
+            background-color: #45a049;
+        }
+        .otp-list {
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-top: 20px;
+            border-radius: 5px;
+            background-color: #fff;
+        }
+        .otp-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .otp-item:last-child {
+            border-bottom: none;
+        }
+        .otp-item span {
+            font-family: monospace;
+            font-size: 16px;
+        }
+        button {
+            padding: 5px 10px;
+            background-color: #f44336;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #e53935;
+        }
+        #otpManager { display: none; }
+        #login { display: block; }
+        #settings { display: none; margin-top: 20px; }
+        .settings-container {
+            margin-bottom: 20px;
+        }
+        .settings-container input {
+            width: 100%;
+        }
+        .lock-button {
+            padding: 10px 20px;
+            background-color: #ff9800;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 20px;
+            width: 100%;
+        }
+        .lock-button:hover {
+            background-color: #fb8c00;
+        }
+    </style>
+</head>
+<body>
+    <div id="login">
+        <h2>Enter Password to Access OTP Manager</h2>
+        <input type="password" id="password" placeholder="Enter your password">
+        <button class="button" onclick="login()">Login</button>
+    </div>
+
+    <div id="otpManager">
+        <h2>OTP Manager</h2>
+        <div class="input-container">
+            <label for="account">Account Name:</label>
+            <input type="text" id="account" placeholder="e.g., Gmail">
+            <label for="secret">TOTP Secret:</label>
+            <input type="text" id="secret" placeholder="e.g., JBSWY3DPEHPK3PXP">
+            <button class="button" onclick="addAccount()">Add Account</button>
+        </div>
+        <div id="otpList" class="otp-list">
+            <div class="otp-item">
+                <strong>Account</strong> <strong>OTP</strong> <strong>Actions</strong>
+            </div>
+        </div>
+        <button class="button" onclick="showSettings()">Settings</button>
+        <button class="lock-button" onclick="logout()">Lock</button>
+    </div>
+
+    <div id="settings">
+        <h2>Settings</h2>
+        <div class="settings-container">
+            <label for="newPassword">Change Password:</label>
+            <input type="password" id="newPassword" placeholder="Enter new password">
+            <button class="button" onclick="changePassword()">Change Password</button>
+        </div>
+        <button class="button" onclick="backToOTPManager()">Back to OTP Manager</button>
+    </div>
+
+    <script>
+        const PASSWORD_KEY = "otpPassword";  // Local storage key for password
+        const INACTIVITY_TIMEOUT = 600000;   // 10 minutes (in milliseconds)
+
+        // Default password is set to "000000" initially
+        if (!localStorage.getItem(PASSWORD_KEY)) {
+            localStorage.setItem(PASSWORD_KEY, "000000");  // Set default password if not set
+        }
+
+        // Function to check password and login
+        function login() {
+            const passwordInput = document.getElementById("password");
+            const enteredPassword = passwordInput.value.trim();
+            const storedPassword = localStorage.getItem(PASSWORD_KEY);
+            
+            if (enteredPassword === storedPassword) {
+                document.getElementById("login").style.display = "none";  // Hide login screen
+                document.getElementById("otpManager").style.display = "block";  // Show OTP manager
+                passwordInput.value = "";  // Clear password field
+                refreshOTPs();  // Refresh OTPs once logged in
+                startInactivityTimer();  // Start inactivity timer
+            } else {
+                alert("Incorrect password. Please try again.");
+                passwordInput.value = "";  // Clear password field on failed attempt
+            }
+        }
+
+        // Function to load saved OTP secrets from localStorage
+        async function loadSecrets() {
+            let secrets = localStorage.getItem("otpSecrets");
+            return secrets ? JSON.parse(secrets) : {};
+        }
+
+        // Function to save OTP secrets to localStorage
+        async function saveSecrets(secrets) {
+            localStorage.setItem("otpSecrets", JSON.stringify(secrets));
+        }
+
+        // Function to generate TOTP using the secret key
+        async function generateTOTP(secret) {
+            try {
+                const key = base32ToBytes(secret);
+                const epoch = Math.floor(Date.now() / 1000);
+                const time = Math.floor(epoch / 30);
+                const timeBuffer = new ArrayBuffer(8);
+                new DataView(timeBuffer).setUint32(4, time, false);
+                const cryptoKey = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+                const hmac = await crypto.subtle.sign("HMAC", cryptoKey, timeBuffer);
+                const hmacArray = new Uint8Array(hmac);
+
+                const offset = hmacArray[hmacArray.length - 1] & 0xf;
+                const otp = (
+                    ((hmacArray[offset] & 0x7f) << 24) |
+                    ((hmacArray[offset + 1] & 0xff) << 16) |
+                    ((hmacArray[offset + 2] & 0xff) << 8) |
+                    (hmacArray[offset + 3] & 0xff)
+                ) % 1000000;
+
+                return otp.toString().padStart(6, '0');
+            } catch (e) {
+                console.error("Error generating OTP:", e);
+                return "Error";
+            }
+        }
+
+        // Helper function to convert a base32 string to a byte array
+        function base32ToBytes(base32) {
+            const base32Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+            let bits = "";
+            for (let i = 0; i < base32.length; i++) {
+                const value = base32Chars.indexOf(base32[i].toUpperCase());
+                bits += value.toString(2).padStart(5, '0');
+            }
+
+            const bytes = [];
+            for (let i = 0; i < bits.length; i += 8) {
+                bytes.push(parseInt(bits.substring(i, i + 8), 2));
+            }
+            return new Uint8Array(bytes);
+        }
+
+        // Function to add an account
+        async function addAccount() {
+            const account = document.getElementById("account").value.trim();
+            const secret = document.getElementById("secret").value.trim();
+            if (!account || !secret) {
+                alert("Please enter both account name and secret.");
+                return;
+            }
+
+            const secrets = await loadSecrets();
+            secrets[account] = secret;
+            await saveSecrets(secrets);
+            document.getElementById("account").value = "";
+            document.getElementById("secret").value = "";
+            updateDisplay();
+        }
+
+        // Function to delete an account
+        async function deleteAccount(account) {
+            const secrets = await loadSecrets();
+            delete secrets[account];
+            await saveSecrets(secrets);
+            updateDisplay();
+        }
+
+        // Function to update the display with OTPs
+        async function updateDisplay() {
+            const otpList = document.getElementById("otpList");
+            otpList.innerHTML = '<div class="otp-item"><strong>Account</strong> <strong>OTP</strong> <strong>Actions</strong></div>';
+
+            const secrets = await loadSecrets();
+            for (const [account, secret] of Object.entries(secrets)) {
+                const otp = await generateTOTP(secret);
+                const div = document.createElement("div");
+                div.className = "otp-item";
+                div.innerHTML = `<span>${account}</span> <span>${otp}</span> <button onclick="deleteAccount('${account}')">Delete</button>`;
+                otpList.appendChild(div);
+            }
+        }
+
+        // Function to refresh OTPs every 30 seconds
+        function refreshOTPs() {
+            updateDisplay();
+            setInterval(updateDisplay, 30000);  // Refresh every 30 seconds
+        }
+
+        // Show Settings
+        function showSettings() {
+            document.getElementById("otpManager").style.display = "none";
+            document.getElementById("settings").style.display = "block";
+        }
+
+        // Go back to OTP Manager
+        function backToOTPManager() {
+            document.getElementById("settings").style.display = "none";
+            document.getElementById("otpManager").style.display = "block";
+        }
+
+        // Change Password
+        function changePassword() {
+            const newPassword = document.getElementById("newPassword").value.trim();
+            if (newPassword.length < 6) {
+                alert("Password must be at least 6 characters long.");
+                return;
+            }
+            localStorage.setItem(PASSWORD_KEY, newPassword);  // Save new password
+            alert("Password changed successfully!");
+            backToOTPManager();  // Go back to OTP Manager
+        }
+
+        // Lock (log out) the user
+        function logout() {
+            document.getElementById("otpManager").style.display = "none";
+            document.getElementById("login").style.display = "block";
+            document.getElementById("password").value = "";  // Clear password field on logout
+        }
+
+        // Inactivity timer logic
+        let inactivityTimer;
+        function startInactivityTimer() {
+            clearTimeout(inactivityTimer);
+            inactivityTimer = setTimeout(logout, INACTIVITY_TIMEOUT);  // Log out after 10 minutes
+        }
+
+        // Reset inactivity timer on click events
+        document.addEventListener('click', startInactivityTimer);
+
+        // Ensure login screen shows on page load
+        document.getElementById("login").style.display = "block";
+        document.getElementById("otpManager").style.display = "none";
+        document.getElementById("settings").style.display = "none";
+        document.getElementById("password").value = "";  // Clear password field on load
+    </script>
+</body>
+</html>
